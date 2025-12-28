@@ -1,5 +1,5 @@
-import { db } from '../db';
-import { paymentTransactions, payouts, payoutTransactions, events, users } from '../../../movo/drizzle/schema';
+import { db } from '../db.js';
+import { paymentTransactions, payouts, payoutTransactions, events, users } from '../schema.js';
 import { eq, and, gte, lte, sql, desc, asc, isNull, isNotNull, inArray } from 'drizzle-orm';
 
 export class AdminPaymentService {

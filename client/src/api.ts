@@ -64,7 +64,16 @@ export const api = {
   deleteEvent: (id: number) =>
     request(`/events/${id}`, { method: 'DELETE' }),
 
-  getGroups: () => request('/groups'),
+  getGroups: (discoverStatus: string = 'all') => request(`/groups?discoverStatus=${discoverStatus}`),
+
+  approveGroup: (id: number) =>
+    request(`/groups/${id}/approve-discover`, { method: 'POST' }),
+
+  rejectGroup: (id: number, reason: string) =>
+    request(`/groups/${id}/reject-discover`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
 
   deleteGroup: (id: number) =>
     request(`/groups/${id}`, { method: 'DELETE' }),

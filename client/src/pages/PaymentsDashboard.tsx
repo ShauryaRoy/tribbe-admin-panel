@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DollarSign,
-  TrendingUp,
   Users,
   Clock,
   RefreshCw,
@@ -44,7 +43,6 @@ interface PaymentStats {
   totalRefunds: number;
   refundCount: number;
   hostEarnings: number;
-  platformFees: number;
   pendingPayouts: number;
   pendingPayoutCount: number;
 }
@@ -75,6 +73,32 @@ interface HostEarning {
   outstanding: number;
 }
 
+interface HostEarningsByEvent {
+  hostId: string;
+  hostName: string;
+  hostEmail: string;
+  totalEarnings: number;
+  totalTicketsSold: number;
+  events: {
+    eventId: number;
+    eventTitle: string;
+    ticketPrice: number;
+    ticketsSold: number;
+    totalRevenue: number;
+    platformFee: number;
+    hostEarnings: number;
+    payments: {
+      transactionId: number;
+      buyerName: string;
+      buyerEmail: string;
+      amount: number;
+      hostShare: number;
+      platformFee: number;
+      paidAt: string;
+    }[];
+  }[];
+}
+
 interface Payout {
   id: number;
   hostId: string;
@@ -94,7 +118,7 @@ const API_BASE = '/api/admin';
 export default function PaymentsDashboard() {
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<'today' | '7days' | '30days' | 'all'>('30days');
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'hosts' | 'payouts'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'hosts' | 'hostsByEvent' | 'payouts'>('hostsByEvent');
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [payoutForm, setPayoutForm] = useState<{
     hostId: string;
@@ -103,6 +127,8 @@ export default function PaymentsDashboard() {
     notes: string;
   } | null>(null);
   const [refundForm, setRefundForm] = useState<{ transactionId: number; amount: string } | null>(null);
+  const [expandedHosts, setExpandedHosts] = useState<Set<string>>(new Set());
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
 
   // Calculate date filters
   const getDateFilter = () => {
@@ -143,6 +169,14 @@ export default function PaymentsDashboard() {
     queryFn: async () => {
       const params = new URLSearchParams(getDateFilter() as any);
       return authenticatedFetch(`${API_BASE}/payments/host-earnings?${params}`);
+    },
+  });
+
+  const { data: hostEarningsByEvent = [], isLoading: hostEarningsByEventLoading } = useQuery<HostEarningsByEvent[]>({
+    queryKey: [`${API_BASE}/payments/host-earnings-by-event`, dateRange],
+    queryFn: async () => {
+      const params = new URLSearchParams(getDateFilter() as any);
+      return authenticatedFetch(`${API_BASE}/payments/host-earnings-by-event?${params}`);
     },
   });
 
@@ -266,7 +300,7 @@ export default function PaymentsDashboard() {
 
         {/* Stats Cards */}
         {!statsLoading && stats && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between">
                 <div>
@@ -296,19 +330,6 @@ export default function PaymentsDashboard() {
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-gray-600">Platform Fees</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">{formatCurrency(stats.platformFees)}</p>
-                  <p className="text-xs text-gray-500 mt-1">Earned</p>
-                </div>
-                <div className="p-3 bg-purple-100 rounded-full">
-                  <TrendingUp className="w-6 h-6 text-purple-600" />
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between">
-                <div>
                   <p className="text-sm text-gray-600">Pending Payouts</p>
                   <p className="text-2xl font-bold text-gray-900 mt-1">{formatCurrency(stats.pendingPayouts)}</p>
                   <p className="text-xs text-gray-500 mt-1">{stats.pendingPayoutCount} payouts</p>
@@ -326,9 +347,10 @@ export default function PaymentsDashboard() {
           <div className="border-b border-gray-200">
             <nav className="flex -mb-px">
               {[
+                { id: 'hostsByEvent', label: 'Host Earnings (Detailed)' },
                 { id: 'overview', label: 'Overview' },
                 { id: 'transactions', label: 'Transactions' },
-                { id: 'hosts', label: 'Host Earnings' },
+                { id: 'hosts', label: 'Host Summary' },
                 { id: 'payouts', label: 'Payouts' },
               ].map((tab) => (
                 <button
@@ -347,6 +369,152 @@ export default function PaymentsDashboard() {
           </div>
 
           <div className="p-6">
+            {/* Host Earnings by Event Tab (DETAILED VIEW) */}
+            {activeTab === 'hostsByEvent' && (
+              <div>
+                <div className="mb-4">
+                  <h2 className="text-xl font-bold">Host Earnings by Event (Captured Payments Only)</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Shows all hosts, their events, and who paid for each event
+                  </p>
+                </div>
+
+                {hostEarningsByEventLoading ? (
+                  <div className="text-center py-8 text-gray-500">Loading...</div>
+                ) : hostEarningsByEvent.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No earnings data found for the selected period
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {hostEarningsByEvent.map((host) => (
+                      <div key={host.hostId} className="border rounded-lg overflow-hidden">
+                        {/* Host Header */}
+                        <div 
+                          className="bg-gray-100 p-4 cursor-pointer hover:bg-gray-200 transition"
+                          onClick={() => {
+                            const newExpanded = new Set(expandedHosts);
+                            if (newExpanded.has(host.hostId)) {
+                              newExpanded.delete(host.hostId);
+                            } else {
+                              newExpanded.add(host.hostId);
+                            }
+                            setExpandedHosts(newExpanded);
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h3 className="text-lg font-bold text-gray-900">{host.hostName}</h3>
+                              <p className="text-sm text-gray-600">{host.hostEmail}</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-2xl font-bold text-green-600">
+                                {formatCurrency(host.totalEarnings)}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                {host.events.length} events • {host.totalTicketsSold} tickets sold
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Events List */}
+                        {expandedHosts.has(host.hostId) && (
+                          <div className="p-4 bg-white space-y-4">
+                            {host.events.map((event) => (
+                              <div key={event.eventId} className="border rounded-lg overflow-hidden">
+                                {/* Event Header */}
+                                <div 
+                                  className="bg-blue-50 p-3 cursor-pointer hover:bg-blue-100 transition"
+                                  onClick={() => {
+                                    const key = `${host.hostId}-${event.eventId}`;
+                                    const newExpanded = new Set(expandedEvents);
+                                    if (newExpanded.has(key)) {
+                                      newExpanded.delete(key);
+                                    } else {
+                                      newExpanded.add(key);
+                                    }
+                                    setExpandedEvents(newExpanded);
+                                  }}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div>
+                                      <h4 className="font-semibold text-gray-900">{event.eventTitle}</h4>
+                                      <p className="text-xs text-gray-600">
+                                        Ticket Price: {formatCurrency(event.ticketPrice)} • 
+                                        Sold: {event.ticketsSold}
+                                      </p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="font-bold text-gray-900">
+                                        {formatCurrency(event.hostEarnings)}
+                                      </p>
+                                      <p className="text-xs text-gray-600">
+                                        Revenue: {formatCurrency(event.totalRevenue)}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Payments List */}
+                                {expandedEvents.has(`${host.hostId}-${event.eventId}`) && (
+                                  <div className="p-3 bg-white">
+                                    <h5 className="text-sm font-semibold text-gray-700 mb-2">
+                                      Payments ({event.payments.length})
+                                    </h5>
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead className="bg-gray-50">
+                                          <tr>
+                                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Buyer</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Amount</th>
+                                            <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Host Gets</th>
+                                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Paid At</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-200">
+                                          {event.payments.map((payment) => (
+                                            <tr key={payment.transactionId} className="hover:bg-gray-50">
+                                              <td className="px-3 py-2">
+                                                <div className="font-medium text-gray-900">{payment.buyerName}</div>
+                                                <div className="text-xs text-gray-500">{payment.buyerEmail}</div>
+                                              </td>
+                                              <td className="px-3 py-2 text-right font-medium text-gray-900">
+                                                {formatCurrency(payment.amount)}
+                                              </td>
+                                              <td className="px-3 py-2 text-right font-semibold text-green-600">
+                                                {formatCurrency(payment.hostShare)}
+                                              </td>
+                                              <td className="px-3 py-2 text-gray-600">
+                                                {formatDate(payment.paidAt)}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                        <tfoot className="bg-gray-50 font-semibold">
+                                          <tr>
+                                            <td className="px-3 py-2 text-right" colSpan={2}>Total:</td>
+                                            <td className="px-3 py-2 text-right text-green-600">
+                                              {formatCurrency(event.hostEarnings)}
+                                            </td>
+                                            <td></td>
+                                          </tr>
+                                        </tfoot>
+                                      </table>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Transactions Tab */}
             {activeTab === 'transactions' && (
               <div>
@@ -366,7 +534,6 @@ export default function PaymentsDashboard() {
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Event</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Host</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Fee</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Host Share</th>
                         <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
@@ -376,13 +543,13 @@ export default function PaymentsDashboard() {
                     <tbody className="bg-white divide-y divide-gray-200">
                       {transactionsLoading ? (
                         <tr>
-                          <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                          <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
                             Loading...
                           </td>
                         </tr>
                       ) : transactions.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                          <td colSpan={9} className="px-4 py-8 text-center text-gray-500">
                             No transactions found
                           </td>
                         </tr>
@@ -405,9 +572,6 @@ export default function PaymentsDashboard() {
                             </td>
                             <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
                               {formatCurrency(txn.amount / 100)}
-                            </td>
-                            <td className="px-4 py-3 text-sm text-right text-gray-600">
-                              {formatCurrency(txn.platformFee / 100)}
                             </td>
                             <td className="px-4 py-3 text-sm text-right font-medium text-green-600">
                               {formatCurrency(txn.hostShare / 100)}
@@ -682,7 +846,6 @@ export default function PaymentsDashboard() {
                         <li>• View all payment transactions and host earnings</li>
                         <li>• Create and manage payouts to event hosts</li>
                         <li>• Process refunds when needed</li>
-                        <li>• Track platform fees and revenue</li>
                         <li>• Export transaction data for accounting</li>
                       </ul>
                     </div>
@@ -883,10 +1046,6 @@ export default function PaymentsDashboard() {
                 <div>
                   <span className="text-gray-600">Amount:</span>
                   <div className="font-bold text-lg">{formatCurrency(selectedTransaction.amount / 100)}</div>
-                </div>
-                <div>
-                  <span className="text-gray-600">Platform Fee:</span>
-                  <div className="font-medium">{formatCurrency(selectedTransaction.platformFee / 100)}</div>
                 </div>
                 <div>
                   <span className="text-gray-600">Host Share:</span>

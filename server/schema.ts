@@ -14,6 +14,7 @@ export const users = pgTable('users', {
   location: varchar('location'),
   website: varchar('website'),
   banned: boolean('banned'),
+  role: varchar('role').default('ADMIN'), // ADMIN | FINANCE_ADMIN
 });
 
 export const events = pgTable('events', {
@@ -79,21 +80,40 @@ export const paymentTransactions = pgTable('payment_transactions', {
 export const payouts = pgTable('payouts', {
   id: serial('id').primaryKey(),
   hostId: varchar('host_id'),
-  amount: integer('amount'),
-  status: varchar('status'),
-  paymentReference: text('payment_reference'),
+  payoutMethod: varchar('payout_method'), // UPI | BANK
+  amount: integer('amount'), // amount_total in paise
+  currency: varchar('currency', { length: 3 }).default('INR'), // ISO 4217 currency code
+  status: varchar('status'), // PENDING | PAID | ON_HOLD | CANCELLED
+  paymentReference: text('payment_reference'), // reference_id - required when PAID (immutable)
   upiId: text('upi_id'),
   bankDetails: jsonb('bank_details'),
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow(),
   paidAt: timestamp('paid_at'),
-  createdBy: varchar('created_by'),
+  cancelledAt: timestamp('cancelled_at'), // when payout was cancelled
+  createdBy: varchar('created_by'), // created_by_admin_id
+  paidBy: varchar('paid_by'), // paid_by_admin_id
+  cancelledBy: varchar('cancelled_by'), // cancelled_by_admin_id
+  eventCount: integer('event_count'), // cached count of events
+  lastEventDate: timestamp('last_event_date'), // cached last event date
+  version: integer('version').default(1), // optimistic locking version (PART 7)
+  createdByRole: varchar('created_by_role'), // ADMIN | FINANCE_ADMIN (PART 6)
+  paidByRole: varchar('paid_by_role'), // ADMIN | FINANCE_ADMIN (PART 6)
+  cancelledByRole: varchar('cancelled_by_role'), // ADMIN | FINANCE_ADMIN (PART 6)
 });
 
 export const payoutTransactions = pgTable('payout_transactions', {
   id: serial('id').primaryKey(),
   payoutId: integer('payout_id'),
-  transactionId: integer('transaction_id'),
-  hostShareAmount: integer('host_share_amount'),
+  transactionId: integer('transaction_id'), // payment_id - foreign key to payment_transactions
+  eventId: integer('event_id'),
+  grossAmount: integer('gross_amount'), // original transaction amount
+  platformFee: integer('platform_fee'),
+  netAmount: integer('net_amount'), // host_share_amount (what host gets)
+  currency: varchar('currency', { length: 3 }).default('INR'), // ISO 4217 currency code
   createdAt: timestamp('created_at').defaultNow(),
+  status: varchar('status').default('AVAILABLE'), // AVAILABLE | RESERVED | PAID
+  // State machine: AVAILABLE (not in payout) → RESERVED (in pending payout) → PAID (in paid payout)
+  // RESERVED can return to AVAILABLE on payout cancellation
+  // PAID is immutable forever
 });

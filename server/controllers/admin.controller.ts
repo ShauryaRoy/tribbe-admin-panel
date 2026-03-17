@@ -110,10 +110,32 @@ export class AdminController {
 
   async getGroups(req: AuthRequest, res: Response) {
     try {
-      const groups = await adminService.getGroups();
-      res.json(groups);
+      const { discoverStatus } = req.query as { discoverStatus?: string };
+      const groups = await adminService.getGroups(discoverStatus);
+      res.json({ groups });
     } catch (error) {
       res.status(500).json({ error: 'Failed to fetch groups' });
+    }
+  }
+
+  async approveGroupForDiscover(req: AuthRequest, res: Response) {
+    try {
+      const groupId = parseInt(req.params.id);
+      await adminService.approveGroupForDiscover(groupId, req.user!.id);
+      res.json({ message: 'Group approved for groups page' });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to approve group' });
+    }
+  }
+
+  async rejectGroupForDiscover(req: AuthRequest, res: Response) {
+    try {
+      const groupId = parseInt(req.params.id);
+      const { reason } = req.body;
+      await adminService.rejectGroupForDiscover(groupId, req.user!.id, reason || '');
+      res.json({ message: 'Group rejected' });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to reject group' });
     }
   }
 
@@ -202,6 +224,16 @@ export class AdminController {
       res.json(analytics);
     } catch (error) {
       res.status(500).json({ error: 'Failed to fetch groups analytics' });
+    }
+  }
+
+  async getHostPaymentDetails(req: AuthRequest, res: Response) {
+    try {
+      const hosts = await adminService.getHostPaymentDetails();
+      res.json({ hosts });
+    } catch (error) {
+      console.error('Error fetching host payment details:', error);
+      res.status(500).json({ error: 'Failed to fetch host payment details' });
     }
   }
 }

@@ -61,6 +61,24 @@ export class AdminPaymentController {
     }
   }
 
+  // GET /api/admin/payments/host-earnings-by-event
+  async getHostEarningsByEvent(req: Request, res: Response) {
+    try {
+      const { startDate, endDate } = req.query;
+      
+      const filters = {
+        startDate: startDate ? new Date(startDate as string) : undefined,
+        endDate: endDate ? new Date(endDate as string) : undefined,
+      };
+
+      const earnings = await paymentService.getHostEarningsByEvent(filters);
+      res.json(earnings);
+    } catch (error: any) {
+      console.error('Get host earnings by event error:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+
   // POST /api/admin/payments/create-payout
   async createPayout(req: Request, res: Response) {
     try {

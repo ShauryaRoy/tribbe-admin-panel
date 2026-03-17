@@ -9,10 +9,10 @@ export class AdminPaymentService {
     
     const dateFilter = [];
     if (startDate) {
-      dateFilter.push(gte(paymentTransactions.createdAt, startDate.toISOString()));
+      dateFilter.push(gte(paymentTransactions.createdAt, startDate));
     }
     if (endDate) {
-      dateFilter.push(lte(paymentTransactions.createdAt, endDate.toISOString()));
+      dateFilter.push(lte(paymentTransactions.createdAt, endDate));
     }
 
     // Total revenue (all captured payments)
@@ -59,19 +59,8 @@ export class AdminPaymentService {
         )
       );
 
-    // Total platform fees
-    const platformFees = await db
-      .select({
-        total: sql<number>`COALESCE(SUM(${paymentTransactions.platformFee}), 0)`,
-      })
-      .from(paymentTransactions)
-      .where(
-        and(
-          eq(paymentTransactions.status, 'captured'),
-          isNull(paymentTransactions.refundedAt),
-          ...dateFilter
-        )
-      );
+    // Platform fees temporarily disabled
+    const platformFees = [{ total: 0 }];
 
     // Pending payouts
     const pendingPayouts = await db
@@ -92,6 +81,8 @@ export class AdminPaymentService {
       pendingPayouts: Number(pendingPayouts[0]?.total || 0) / 100,
       pendingPayoutCount: Number(pendingPayouts[0]?.count || 0),
     };
+
+    return result;
   }
 
   // Get all transactions with details
@@ -107,10 +98,10 @@ export class AdminPaymentService {
     const conditions = [];
     
     if (filters?.startDate) {
-      conditions.push(gte(paymentTransactions.createdAt, filters.startDate.toISOString()));
+      conditions.push(gte(paymentTransactions.createdAt, filters.startDate));
     }
     if (filters?.endDate) {
-      conditions.push(lte(paymentTransactions.createdAt, filters.endDate.toISOString()));
+      conditions.push(lte(paymentTransactions.createdAt, filters.endDate));
     }
     if (filters?.status) {
       conditions.push(eq(paymentTransactions.status, filters.status));
@@ -175,17 +166,18 @@ export class AdminPaymentService {
   async getHostEarnings(filters?: { startDate?: Date; endDate?: Date }) {
     const dateFilter = [];
     if (filters?.startDate) {
-      dateFilter.push(gte(paymentTransactions.createdAt, filters.startDate.toISOString()));
+      dateFilter.push(gte(paymentTransactions.createdAt, filters.startDate));
     }
     if (filters?.endDate) {
-      dateFilter.push(lte(paymentTransactions.createdAt, filters.endDate.toISOString()));
+      dateFilter.push(lte(paymentTransactions.createdAt, filters.endDate));
     }
 
     // Get all hosts who have earned money
     const earnings = await db
       .select({
         hostId: events.hostId,
-        totalRevenue: sql<number>`COALESCE(SUM(${paymentTransactions.amount}), 0)`,
+        // Use host share for revenue so fees do not distort host totals
+        totalRevenue: sql<number>`COALESCE(SUM(${paymentTransactions.hostShare}), 0)`,
         hostShare: sql<number>`COALESCE(SUM(${paymentTransactions.hostShare}), 0)`,
         ticketsSold: sql<number>`COUNT(*)`,
       })
@@ -244,6 +236,141 @@ export class AdminPaymentService {
     }).filter(e => e.outstanding > 0); // Only show hosts with outstanding balance
   }
 
+  // Get detailed host earnings by event with payers list
+  async getHostEarningsByEvent(filters?: { startDate?: Date; endDate?: Date }) {
+    const dateFilter = [];
+    if (filters?.startDate) {
+      dateFilter.push(gte(paymentTransactions.createdAt, filters.startDate));
+    }
+    if (filters?.endDate) {
+      dateFilter.push(lte(paymentTransactions.createdAt, filters.endDate));
+    }
+
+    // Get all host events with payments
+    const hostEvents = await db
+      .select({
+        hostId: events.hostId,
+        eventId: events.id,
+        eventTitle: events.title,
+        ticketPrice: events.ticketPrice,
+      })
+      .from(events)
+      .innerJoin(
+        paymentTransactions,
+        and(
+          eq(paymentTransactions.eventId, events.id),
+          eq(paymentTransactions.status, 'captured'),
+          isNull(paymentTransactions.refundedAt)
+        )
+      )
+      .where(and(...dateFilter))
+      .groupBy(events.hostId, events.id, events.title, events.ticketPrice);
+
+    if (hostEvents.length === 0) {
+      return [];
+    }
+
+    // Get host details
+    const hostIds = [...new Set(hostEvents.map(e => e.hostId).filter(Boolean))];
+    const hosts = await db
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+      })
+      .from(users)
+      .where(inArray(users.id, hostIds as string[]));
+
+    const hostMap = new Map(hosts.map(h => [h.id, h]));
+
+    // Get all payments for these events with buyer details
+    const eventIds = hostEvents.map(e => e.eventId);
+    const payments = await db
+      .select({
+        transactionId: paymentTransactions.id,
+        eventId: paymentTransactions.eventId,
+        amount: paymentTransactions.amount,
+        platformFee: paymentTransactions.platformFee,
+        hostShare: paymentTransactions.hostShare,
+        createdAt: paymentTransactions.createdAt,
+        buyerId: users.id,
+        buyerFirstName: users.firstName,
+        buyerLastName: users.lastName,
+        buyerEmail: users.email,
+      })
+      .from(paymentTransactions)
+      .leftJoin(users, eq(paymentTransactions.userId, users.id))
+      .where(
+        and(
+          inArray(paymentTransactions.eventId, eventIds),
+          eq(paymentTransactions.status, 'captured'),
+          isNull(paymentTransactions.refundedAt),
+          ...dateFilter
+        )
+      )
+      .orderBy(desc(paymentTransactions.createdAt));
+
+    // Group payments by event
+    const paymentsByEvent = new Map<number, typeof payments>();
+    payments.forEach(payment => {
+      if (!paymentsByEvent.has(payment.eventId!)) {
+        paymentsByEvent.set(payment.eventId!, []);
+      }
+      paymentsByEvent.get(payment.eventId!)!.push(payment);
+    });
+
+    // Build result grouped by host
+    const hostEarningsMap = new Map<string, any>();
+
+    hostEvents.forEach(event => {
+      if (!event.hostId) return;
+
+      const eventPayments = paymentsByEvent.get(event.eventId) || [];
+      const totalAmount = eventPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalHostShare = eventPayments.reduce((sum, p) => sum + (p.hostShare || 0), 0);
+      const totalPlatformFee = eventPayments.reduce((sum, p) => sum + (p.platformFee || 0), 0);
+
+      const eventData = {
+        eventId: event.eventId,
+        eventTitle: event.eventTitle,
+        ticketPrice: event.ticketPrice / 100,
+        ticketsSold: eventPayments.length,
+        totalRevenue: totalAmount / 100,
+        platformFee: totalPlatformFee / 100,
+        hostEarnings: totalHostShare / 100,
+        payments: eventPayments.map(p => ({
+          transactionId: p.transactionId,
+          buyerName: `${p.buyerFirstName || ''} ${p.buyerLastName || ''}`.trim() || 'Unknown',
+          buyerEmail: p.buyerEmail,
+          amount: p.amount! / 100,
+          hostShare: p.hostShare! / 100,
+          platformFee: p.platformFee! / 100,
+          paidAt: p.createdAt,
+        })),
+      };
+
+      if (!hostEarningsMap.has(event.hostId)) {
+        const host = hostMap.get(event.hostId);
+        hostEarningsMap.set(event.hostId, {
+          hostId: event.hostId,
+          hostName: host ? `${host.firstName || ''} ${host.lastName || ''}`.trim() || host.email : 'Unknown',
+          hostEmail: host?.email,
+          events: [],
+          totalEarnings: 0,
+          totalTicketsSold: 0,
+        });
+      }
+
+      const hostData = hostEarningsMap.get(event.hostId)!;
+      hostData.events.push(eventData);
+      hostData.totalEarnings += totalHostShare / 100;
+      hostData.totalTicketsSold += eventPayments.length;
+    });
+
+    return Array.from(hostEarningsMap.values()).sort((a, b) => b.totalEarnings - a.totalEarnings);
+  }
+
   // Create a payout
   async createPayout(data: {
     hostId: string;
@@ -259,7 +386,10 @@ export class AdminPaymentService {
     const unpaidTransactions = await db
       .select({
         id: paymentTransactions.id,
+        eventId: paymentTransactions.eventId,
         hostShare: paymentTransactions.hostShare,
+        amount: paymentTransactions.amount,
+        platformFee: paymentTransactions.platformFee,
       })
       .from(paymentTransactions)
       .leftJoin(events, eq(paymentTransactions.eventId, events.id))
@@ -303,7 +433,12 @@ export class AdminPaymentService {
       payoutTxns.push({
         payoutId: payout.id,
         transactionId: txn.id,
-        hostShareAmount: shareAmount,
+        eventId: txn.eventId,
+        grossAmount: txn.amount,
+        platformFee: txn.platformFee || 0,
+        netAmount: shareAmount,
+        currency: 'INR',
+        status: 'RESERVED',
       });
       
       remainingAmount -= shareAmount;
@@ -364,7 +499,7 @@ export class AdminPaymentService {
       .update(payouts)
       .set({
         status: 'paid',
-        paidAt: new Date().toISOString(),
+        paidAt: new Date(),
         paymentReference,
       })
       .where(eq(payouts.id, payoutId))
@@ -409,7 +544,7 @@ export class AdminPaymentService {
       .update(paymentTransactions)
       .set({
         status: 'refunded',
-        refundedAt: new Date().toISOString(),
+        refundedAt: new Date(),
         refundId,
         refundAmount: amountInPaise,
         hostShare: 0, // Reset host share to 0 on refund

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import { api } from '../api';
+import EventPaymentDetailsDialog from '../components/EventPaymentDetailsDialog';
 
 interface Event {
   id: number;
@@ -15,6 +16,16 @@ interface Event {
   discoverStatus: string | null;
   createdAt: string;
   rsvp_count?: number;
+  ticketingEnabled?: boolean;
+  ticketPrice?: number;
+  currency?: string;
+  hostUpiId?: string;
+  payoutMethod?: string;
+  accountHolderName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  maxGuests?: number;
+  currentCapacity?: number;
 }
 
 export default function Events() {
@@ -22,6 +33,7 @@ export default function Events() {
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedEventForPayment, setSelectedEventForPayment] = useState<Event | null>(null);
 
   useEffect(() => {
     loadEvents();
@@ -149,6 +161,7 @@ export default function Events() {
                   <th className="px-6 py-4">Host</th>
                   <th className="px-6 py-4">Date & Location</th>
                   <th className="px-6 py-4">RSVPs</th>
+                  <th className="px-6 py-4">Ticketing</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Created</th>
                   <th className="px-6 py-4">Actions</th>
@@ -182,6 +195,23 @@ export default function Events() {
                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                         {event.rsvp_count || 0}
                       </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {event.ticketingEnabled ? (
+                        <div>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                            ₹{(event.ticketPrice || 0).toLocaleString('en-IN')}
+                          </span>
+                          <button
+                            onClick={() => setSelectedEventForPayment(event)}
+                            className="block mt-1 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            View Payment Details
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-500">Free</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">{getStatusBadge(event.discoverStatus)}</td>
                     <td className="px-6 py-4 text-gray-500 text-xs">
@@ -219,6 +249,14 @@ export default function Events() {
             </table>
           </div>
         </div>
+      )}
+      
+      {/* Payment Details Dialog */}
+      {selectedEventForPayment && (
+        <EventPaymentDetailsDialog
+          event={selectedEventForPayment}
+          onClose={() => setSelectedEventForPayment(null)}
+        />
       )}
     </div>
   );

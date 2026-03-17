@@ -16,6 +16,8 @@ export default function Navbar({ onLogout }: { onLogout: () => void }) {
     { href: '/groups', label: 'Groups', icon: '👥' },
     { href: '/users', label: 'Users', icon: '👤' },
     { href: '/payments', label: 'Payments', icon: '💰' },
+    { href: '/payouts', label: 'Payouts', icon: '💸' },
+    { href: '/host-payment-details', label: 'Host Payment Info', icon: '🏦' },
     { href: '/analytics', label: 'Analytics', icon: '📈' },
     { href: '/audit-logs', label: 'Audit Logs', icon: '📜' },
   ];
@@ -30,8 +32,8 @@ export default function Navbar({ onLogout }: { onLogout: () => void }) {
       <nav className="flex-1 space-y-1">
         {navItems.map((item) => (
           <Link key={item.href} href={item.href}>
-            <a 
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group ${
+            <div 
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 group cursor-pointer ${
                 location === item.href 
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20' 
                   : 'text-gray-400 hover:bg-gray-800 hover:text-white'
@@ -39,7 +41,7 @@ export default function Navbar({ onLogout }: { onLogout: () => void }) {
             >
               <span className="text-lg group-hover:scale-110 transition-transform">{item.icon}</span>
               <span className="font-medium text-sm">{item.label}</span>
-            </a>
+            </div>
           </Link>
         ))}
       </nav>

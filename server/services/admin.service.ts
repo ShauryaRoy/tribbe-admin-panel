@@ -99,7 +99,8 @@ export class AdminService {
     let query = `
       SELECT 
         e.*, 
-        u.first_name || ' ' || u.last_name as host_name,
+        u.first_name as host_first_name,
+        u.last_name as host_last_name,
         u.email as host_email,
         (SELECT COUNT(*) FROM event_rsvps WHERE event_id = e.id) as rsvp_count
       FROM events e
@@ -121,7 +122,28 @@ export class AdminService {
     query += ` ORDER BY e.created_at DESC`;
 
     const result = await pool.query(query);
-    return result.rows;
+    
+    // Map snake_case to camelCase for frontend
+    return result.rows.map(row => ({
+      ...row,
+      hostFirstName: row.host_first_name,
+      hostLastName: row.host_last_name,
+      hostEmail: row.host_email,
+      hostId: row.host_id,
+      createdAt: row.created_at,
+      discoverStatus: row.discover_status,
+      mapLink: row.map_link,
+      // Payment-related fields
+      ticketingEnabled: row.ticketing_enabled,
+      ticketPrice: row.ticket_price,
+      payoutMethod: row.payout_method,
+      hostUpiId: row.host_upi_id,
+      accountHolderName: row.account_holder_name,
+      accountNumber: row.account_number,
+      ifscCode: row.ifsc_code,
+      maxGuests: row.max_guests,
+      currentCapacity: row.current_capacity,
+    }));
   }
 
   async approveEventForDiscover(
@@ -191,18 +213,55 @@ export class AdminService {
     await this.logAction(adminId, 'DELETE_EVENT', 'event', eventId);
   }
 
-  async getGroups(): Promise<Group[]> {
+  async getGroups(discoverStatus?: string): Promise<Group[]> {
+    let whereClause = '';
+    const params: any[] = [];
+    if (discoverStatus && discoverStatus !== 'all') {
+      whereClause = 'WHERE g.discover_status = $1';
+      params.push(discoverStatus);
+    }
     const result = await pool.query(`
       SELECT 
-        g.*,
-        COUNT(gm.user_id) as member_count
+        g.id, g.name, g.description, g.slug, g.category,
+        g.is_public as "isPublic",
+        g.member_count as "memberCount",
+        g.image_url as "imageUrl",
+        g.discover_status as "discoverStatus",
+        g.discover_requested_at as "discoverRequestedAt",
+        g.discover_requested_message as "discoverRequestedMessage",
+        g.discover_review_note as "discoverReviewNote",
+        g.discover_reviewed_at as "discoverReviewedAt",
+        g.created_at as "createdAt",
+        u.email as "creatorEmail",
+        u.first_name as "creatorFirstName",
+        u.last_name as "creatorLastName"
       FROM "groups" g
-      LEFT JOIN group_members gm ON g.id = gm.group_id
-      GROUP BY g.id
+      LEFT JOIN users u ON g.created_by = u.id
+      ${whereClause}
       ORDER BY g.created_at DESC
-    `);
+    `, params);
 
     return result.rows;
+  }
+
+  async approveGroupForDiscover(groupId: number, adminId: string): Promise<void> {
+    await pool.query(
+      `UPDATE "groups"
+       SET discover_status = 'approved', discover_reviewed_by = $1, discover_reviewed_at = NOW()
+       WHERE id = $2`,
+      [adminId, groupId]
+    );
+    await this.logAction(adminId, 'APPROVE_GROUP_DISCOVER', 'group', groupId);
+  }
+
+  async rejectGroupForDiscover(groupId: number, adminId: string, reason: string): Promise<void> {
+    await pool.query(
+      `UPDATE "groups"
+       SET discover_status = 'rejected', discover_reviewed_by = $1, discover_review_note = $2, discover_reviewed_at = NOW()
+       WHERE id = $3`,
+      [adminId, reason, groupId]
+    );
+    await this.logAction(adminId, 'REJECT_GROUP_DISCOVER', 'group', groupId, { reason });
   }
 
   async deleteGroup(groupId: number, adminId: string): Promise<void> {
@@ -301,6 +360,93 @@ export class AdminService {
       date: row.date.toISOString().split('T')[0],
       count: parseInt(row.count),
     }));
+  }
+
+  async getHostPaymentDetails(): Promise<any[]> {
+    const query = `
+      WITH host_events AS (
+        SELECT 
+          e.host_id,
+          e.id as event_id,
+          e.title as event_title,
+          e.payout_method,
+          e.host_upi_id,
+          e.account_holder_name,
+          e.account_number,
+          e.ifsc_code,
+          e.datetime,
+          e.ticket_price,
+          COUNT(pt.id) as transaction_count,
+          COALESCE(SUM(pt.amount), 0) as total_revenue
+        FROM events e
+        LEFT JOIN payment_transactions pt ON e.id = pt.event_id AND pt.status = 'captured'
+        WHERE e.ticketing_enabled = true AND e.payout_method IS NOT NULL
+        GROUP BY e.id, e.host_id, e.title, e.payout_method, e.host_upi_id, 
+                 e.account_holder_name, e.account_number, e.ifsc_code, e.datetime, e.ticket_price
+      ),
+      host_summary AS (
+        SELECT 
+          he.host_id,
+          u.first_name,
+          u.last_name,
+          u.email,
+          COUNT(DISTINCT he.event_id) as paid_events_count,
+          SUM(he.total_revenue) as total_revenue,
+          MAX(he.datetime) as latest_event_date,
+          json_agg(
+            json_build_object(
+              'method', he.payout_method,
+              'upiId', he.host_upi_id,
+              'accountHolderName', he.account_holder_name,
+              'accountNumber', he.account_number,
+              'ifscCode', he.ifsc_code,
+              'eventTitle', he.event_title,
+              'eventDate', he.datetime
+            ) ORDER BY he.datetime DESC
+          ) as payment_details
+        FROM host_events he
+        JOIN users u ON he.host_id = u.id
+        GROUP BY he.host_id, u.first_name, u.last_name, u.email
+      )
+      SELECT * FROM host_summary
+      ORDER BY latest_event_date DESC
+    `;
+
+    const result = await pool.query(query);
+    
+    return result.rows.map(row => {
+      // Group payment methods to avoid duplicates
+      const paymentMethodsMap = new Map();
+      
+      row.payment_details.forEach((detail: any) => {
+        const key = `${detail.method}-${detail.upiId || ''}-${detail.accountNumber || ''}`;
+        if (!paymentMethodsMap.has(key)) {
+          paymentMethodsMap.set(key, {
+            method: detail.method,
+            upiId: detail.upiId,
+            accountHolderName: detail.accountHolderName,
+            accountNumber: detail.accountNumber,
+            ifscCode: detail.ifscCode,
+            eventCount: 1,
+            lastUsedEvent: detail.eventTitle,
+          });
+        } else {
+          const existing = paymentMethodsMap.get(key);
+          existing.eventCount += 1;
+        }
+      });
+
+      return {
+        hostId: row.host_id,
+        hostFirstName: row.first_name,
+        hostLastName: row.last_name,
+        hostEmail: row.email,
+        paidEventsCount: parseInt(row.paid_events_count),
+        totalRevenue: parseInt(row.total_revenue || 0),
+        paymentMethods: Array.from(paymentMethodsMap.values()),
+        latestEventDate: row.latest_event_date,
+      };
+    });
   }
 }
 

@@ -10,6 +10,8 @@ import Groups from './pages/Groups';
 import Analytics from './pages/Analytics';
 import AuditLogs from './pages/AuditLogs';
 import PaymentsDashboard from './pages/PaymentsDashboard';
+import Payouts from './pages/Payouts';
+import HostPaymentDetails from './pages/HostPaymentDetails';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -34,6 +36,8 @@ export default function App() {
           <Route path='/users' component={Users} />
           <Route path='/groups' component={Groups} />
           <Route path='/payments' component={PaymentsDashboard} />
+          <Route path='/payouts' component={Payouts} />
+          <Route path='/host-payment-details' component={HostPaymentDetails} />
           <Route path='/analytics' component={Analytics} />
           <Route path='/audit-logs' component={AuditLogs} />
           <Route path='/'><Redirect to='/dashboard' /></Route>
